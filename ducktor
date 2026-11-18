@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# ducktor — веб-поиск из терминала через сервис ducktor (tor + DuckDuckGo).
+set -euo pipefail
+
+VERSION="1.0.0"
+URL="${DUCKTOR_URL:-https://ducktor.a-kuz.online}"
+KEY_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/ducktor/key"
+
+usage() {
+  cat <<EOF
+ducktor $VERSION — веб-поиск через ducktor (tor + DuckDuckGo)
+
+  ducktor [-n N] [-g GL] [--json] <запрос>
+  ducktor <запрос> [N] [GL]
+  ducktor login      ввести и сохранить ключ
+  ducktor logout     удалить сохранённый ключ
+
+  -n, --num N    сколько результатов (по умолчанию 10, максимум 100)
+  -g, --gl GL    страна выдачи: us, ru, de ... (по умолчанию без региона)
+      --json     сырой JSON ответа
+  -V, --version  версия
+
+Ключ: переменная DUCKTOR_KEY, иначе файл $KEY_FILE.
+Без ключа ducktor спросит его при первом запуске и сохранит в этот файл.
+Адрес сервиса: DUCKTOR_URL (сейчас $URL).
+EOF
+}
+
+die() { echo "ducktor: $*" >&2; exit 1; }
+
+ask_key() {
+  { : </dev/tty; } 2>/dev/null || die "ключ не задан: запустите 'ducktor login' в терминале или задайте DUCKTOR_KEY"
+  local key=""
+  printf 'Ключ ducktor: ' >/dev/tty
+  IFS= read -rs key </dev/tty || true
+  printf '\n' >/dev/tty
+  key="${key//[[:space:]]/}"
+  [[ -n "$key" ]] || die "пустой ключ"
+  mkdir -p "$(dirname "$KEY_FILE")"
+  (umask 077; printf '%s\n' "$key" >"$KEY_FILE")
+  echo "ключ сохранён в $KEY_FILE" >&2
+  KEY="$key"
+}
+
+load_key() {
+  KEY="${DUCKTOR_KEY:-}"
+  if [[ -z "$KEY" && -s "$KEY_FILE" ]]; then
+    KEY="$(tr -d '[:space:]' <"$KEY_FILE")"
+  fi
+  [[ -n "$KEY" ]] || ask_key
+}
+
+# Печатает тело ответа в файл $1, HTTP-код — в stdout.
+request() {
+  curl -sS -o "$1" -w '%{http_code}' --max-time 90 -X POST "$URL/search" \
+    -H 'Content-Type: application/json' -H "X-API-KEY: $KEY" -d "$BODY"
+}
+
+NUM=10; GL=""; JSON=0; ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    -V|--version) echo "ducktor $VERSION"; exit 0 ;;
+    -n|--num) [[ $# -ge 2 ]] || die "$1 требует значение"; NUM="$2"; shift 2 ;;
+    -g|--gl) [[ $# -ge 2 ]] || die "$1 требует значение"; GL="$2"; shift 2 ;;
+    --json) JSON=1; shift ;;
+    --) shift; while [[ $# -gt 0 ]]; do ARGS+=("$1"); shift; done ;;
+    -?*) die "неизвестный флаг $1 (см. ducktor --help)" ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+
+case "${ARGS[0]:-}" in
+  "") usage >&2; exit 1 ;;
+  login) [[ ${#ARGS[@]} -eq 1 ]] && { ask_key; exit 0; } ;;
+  logout) [[ ${#ARGS[@]} -eq 1 ]] && { rm -f "$KEY_FILE"; echo "ключ удалён" >&2; exit 0; } ;;
+esac
+
+Q="${ARGS[0]}"
+[[ ${#ARGS[@]} -ge 2 ]] && NUM="${ARGS[1]}"
+[[ ${#ARGS[@]} -ge 3 ]] && GL="${ARGS[2]}"
+[[ ${#ARGS[@]} -le 3 ]] || die "лишние аргументы; запрос из нескольких слов берите в кавычки"
+[[ "$NUM" =~ ^[0-9]+$ && "$NUM" -ge 1 ]] || die "число результатов должно быть целым >= 1, получено '$NUM'"
+
+command -v jq >/dev/null || die "нужен jq (brew install jq)"
+load_key
+
+BODY="$(jq -nc --arg q "$Q" --argjson num "$NUM" --arg gl "$GL" \
+  '{q: $q, num: $num} + (if $gl != "" then {gl: $gl} else {} end)')"
+OUT="$(mktemp)"
+trap 'rm -f "$OUT"' EXIT
+
+CODE="$(request "$OUT")" || die "сервис $URL недоступен"
+if [[ "$CODE" == 401 ]]; then
+  if [[ -n "${DUCKTOR_KEY:-}" ]]; then
+    die "ключ из DUCKTOR_KEY отклонён"
+  fi
+  echo "ducktor: ключ отклонён" >&2
+  ask_key
+  CODE="$(request "$OUT")" || die "сервис $URL недоступен"
+  [[ "$CODE" != 401 ]] || die "ключ отклонён"
+fi
+if [[ "$CODE" != 200 ]]; then
+  die "HTTP $CODE: $(jq -r '.error // empty' "$OUT" 2>/dev/null || head -c 200 "$OUT")"
+fi
+
+if [[ "$JSON" == 1 ]]; then
+  cat "$OUT"; echo
+  exit 0
+fi
+
+COLOR=0
+[[ -t 1 && -z "${NO_COLOR:-}" ]] && COLOR=1
+
+jq -r --argjson color "$COLOR" '
+  def c(code): if $color == 1 then "\u001b[" + code + "m" + . + "\u001b[0m" else . end;
+  def decode:
+    gsub("&quot;"; "\"") | gsub("&#x27;"; "'\''") | gsub("&lt;"; "<")
+    | gsub("&gt;"; ">") | gsub("&nbsp;"; " ") | gsub("&amp;"; "&");
+
+  if (.organic | length) == 0 then
+    "ничего не найдено"
+  else
+    .organic[]
+    | (.link | test("duckduckgo\\.com/y\\.js")) as $ad
+    | ((.link | capture("https?://(?<h>[^/]+)").h) // .link) as $host
+    | (.position | tostring | if length < 2 then " " + . else . end | . + "." | c("90")) + " "
+      + (if $ad then ("реклама" | c("33")) + " " else "" end)
+      + (.title | decode | c("1;36"))
+      + "\n    " + ((if $ad then $host else .link end) | c("32"))
+      + (if (.snippet // "") != "" and ($ad | not)
+         then "\n    " + (.snippet | decode | .[0:200] | c("90"))
+         else "" end)
+  end
+' "$OUT"
