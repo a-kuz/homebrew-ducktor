@@ -2,7 +2,7 @@
 # ducktor — веб-поиск из терминала через сервис ducktor (tor + DuckDuckGo).
 set -euo pipefail
 
-VERSION="1.0.1"
+VERSION="1.0.2"
 URL="${DUCKTOR_URL:-https://ducktor.a-kuz.online}"
 KEY_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/ducktor/key"
 
@@ -105,7 +105,7 @@ if [[ "$CODE" != 200 ]]; then
 fi
 
 if [[ "$JSON" == 1 ]]; then
-  cat "$OUT"; echo
+  jq . "$OUT"
   exit 0
 fi
 
@@ -120,10 +120,6 @@ fi
 
 jq -r --argjson color "$COLOR" "$URLD"'
   def c(code): if $color == 1 then "\u001b[" + code + "m" + . + "\u001b[0m" else . end;
-  def decode:
-    gsub("&quot;"; "\"") | gsub("&#x27;"; "'\''") | gsub("&lt;"; "<")
-    | gsub("&gt;"; ">") | gsub("&nbsp;"; " ") | gsub("&amp;"; "&");
-
   if (.organic | length) == 0 then
     "ничего не найдено"
   else
@@ -132,10 +128,10 @@ jq -r --argjson color "$COLOR" "$URLD"'
     | ((.link | capture("https?://(?<h>[^/]+)").h) // .link) as $host
     | (.position | tostring | if length < 2 then " " + . else . end | . + "." | c("90")) + " "
       + (if $ad then ("реклама" | c("33")) + " " else "" end)
-      + (.title | decode | c("1;36"))
+      + (.title | c("1;36"))
       + "\n    " + ((if $ad then $host else .link | urld end) | c("32"))
       + (if (.snippet // "") != "" and ($ad | not)
-         then "\n    " + (.snippet | decode | .[0:200] | c("90"))
+         then "\n    " + (.snippet | .[0:200] | c("90"))
          else "" end)
   end
 ' "$OUT"
