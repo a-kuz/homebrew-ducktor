@@ -2,7 +2,7 @@
 # ducktor — веб-поиск из терминала через сервис ducktor (tor + DuckDuckGo).
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="1.0.1"
 URL="${DUCKTOR_URL:-https://ducktor.a-kuz.online}"
 KEY_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/ducktor/key"
 
@@ -112,7 +112,13 @@ fi
 COLOR=0
 [[ -t 1 && -z "${NO_COLOR:-}" ]] && COLOR=1
 
-jq -r --argjson color "$COLOR" '
+# Не-ASCII в адресах показывается буквами; @urid есть в jq начиная с 1.8.
+URLD='def urld: .;'
+if jq -n '"%D0%B0" | @urid' >/dev/null 2>&1; then
+  URLD='def urld: gsub("(?<m>(%[89A-Fa-f][0-9A-Fa-f])+)"; .m | try @urid catch .);'
+fi
+
+jq -r --argjson color "$COLOR" "$URLD"'
   def c(code): if $color == 1 then "\u001b[" + code + "m" + . + "\u001b[0m" else . end;
   def decode:
     gsub("&quot;"; "\"") | gsub("&#x27;"; "'\''") | gsub("&lt;"; "<")
@@ -127,7 +133,7 @@ jq -r --argjson color "$COLOR" '
     | (.position | tostring | if length < 2 then " " + . else . end | . + "." | c("90")) + " "
       + (if $ad then ("реклама" | c("33")) + " " else "" end)
       + (.title | decode | c("1;36"))
-      + "\n    " + ((if $ad then $host else .link end) | c("32"))
+      + "\n    " + ((if $ad then $host else .link | urld end) | c("32"))
       + (if (.snippet // "") != "" and ($ad | not)
          then "\n    " + (.snippet | decode | .[0:200] | c("90"))
          else "" end)
