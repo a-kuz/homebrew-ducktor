@@ -1,8 +1,8 @@
 class Ducktor < Formula
   desc "Web search from the terminal via the ducktor service (tor + DuckDuckGo)"
   homepage "https://github.com/a-kuz/homebrew-ducktor"
-  url "https://github.com/a-kuz/homebrew-ducktor/archive/refs/tags/v1.0.1.tar.gz"
-  sha256 "2b2a8d124689a7e1c86cade57dc3a12bfefc67a866bb3a892980be54a5c1ac2f"
+  url "https://github.com/a-kuz/homebrew-ducktor/archive/refs/tags/v1.0.2.tar.gz"
+  sha256 "765829116218af8c38ef42a7f5ead2bcd8e0f02d388dbf05b47b721b366af808"
 
   depends_on "jq"
 
